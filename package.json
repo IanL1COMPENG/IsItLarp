@@ -1,6 +1,6 @@
 {
   "name": "isitlarporno",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "private": true,
   "description": "Evidence-aware LinkedIn wording checker with user-provided profile PDF support",
@@ -12,6 +12,7 @@
     "dev": "node --watch server.mjs"
   },
   "dependencies": {
+    "pdfjs-dist": "4.10.38",
     "pdf-parse": "1.1.1"
   }
 }

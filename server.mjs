@@ -62,30 +62,95 @@ async function readJson(req) {
   try { return JSON.parse(collected); }
   catch { const err = new Error('Invalid JSON request.'); err.status = 400; throw err; }
 }
-// The PDF comes directly from the user's browser, not an automated LinkedIn scrape.
-// No file is persisted. The extracted text is treated the same as pasted text.
+// Parse only files selected by the visitor. No PDF is stored or sent to a third party;
+// Gemini receives only extracted profile text for the requested writing analysis.
+function cleanPdfText(raw) {
+  return String(raw || '')
+    .replace(/\u0000/g, '')
+    .replace(/[\t\u00a0]+/g,' ')
+    .replace(/ {2,}/g,' ')
+    .replace(/\n\s*\n\s*\n+/g,'\n\n')
+    .trim();
+}
+async function extractWithPdfJs(bytes) {
+  // pdfjs-dist v4's legacy build handles many real-world PDF exports that the
+  // old pdf-parse 1.1.1 reader could not handle.
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  pdfjs.GlobalWorkerOptions.workerSrc = import.meta.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+  const task = pdfjs.getDocument({
+    data: Uint8Array.from(bytes),
+    useSystemFonts: true,
+    disableFontFace: true,
+    stopAtErrors: false,
+    isEvalSupported: false,
+    verbosity: 0
+  });
+  let document;
+  try {
+    document = await task.promise;
+    const segments = [];
+    for (let pageNumber = 1; pageNumber <= Math.min(document.numPages, 25); pageNumber++) {
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const pieces = [];
+      for (const item of content.items) {
+        if (typeof item.str !== 'string') continue;
+        pieces.push(item.str);
+        pieces.push(item.hasEOL ? '\n' : ' ');
+      }
+      segments.push(pieces.join(''));
+      page.cleanup();
+    }
+    return { text: cleanPdfText(segments.join('\n\n')), pages: document.numPages };
+  } finally {
+    if (document) await document.destroy();
+    else await task.destroy();
+  }
+}
+async function extractWithLegacyPdfParse(bytes) {
+  const pdfParse = (await import('pdf-parse')).default;
+  if (typeof pdfParse !== 'function') throw new Error('Legacy PDF parser is unavailable');
+  const parsed = await pdfParse(bytes, {max:25});
+  return { text: cleanPdfText(parsed.text), pages: parsed.numpages || null };
+}
 async function extractProfilePdf(base64) {
   if (typeof base64 !== 'string' || base64.length < 100 || base64.length > 6_700_000 ||
       !/^[A-Za-z0-9+/=\s]+$/.test(base64)) {
-    throw Object.assign(new Error('Upload a PDF under 5 MB.'), {status:413});
+    throw Object.assign(new Error('Upload a PDF smaller than 5 MB.'), {status:413});
   }
   const bytes = Buffer.from(base64, 'base64');
   if (bytes.length > 5_000_000 || bytes.subarray(0,5).toString('ascii') !== '%PDF-') {
     throw Object.assign(new Error('That file is not a valid PDF under 5 MB.'), {status:400});
   }
+  let modernError;
   let parsed;
   try {
-    const pdfParse = (await import('pdf-parse')).default;
-    parsed = await pdfParse(bytes, {max:20});
+    parsed = await extractWithPdfJs(bytes);
   } catch (error) {
-    console.error('Profile PDF extraction failed:',error.message);
-    throw Object.assign(new Error('Could not read the PDF. Try downloading it again, or paste the profile text instead.'), {status:422});
+    modernError = error;
+    console.warn('PDF.js extraction failed:', error.name, error.message);
   }
-  const text = String(parsed.text || '').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
-  if (text.length < 100) {
-    throw Object.assign(new Error('This PDF has too little readable text. Paste the About and Experience sections instead.'), {status:422});
+  // If the new reader returned no text, try the older reader as a fallback.
+  if (!parsed || parsed.text.length < 100) {
+    try {
+      const fallback = await extractWithLegacyPdfParse(bytes);
+      if (!parsed || fallback.text.length > parsed.text.length) parsed = fallback;
+    } catch (error) {
+      console.warn('pdf-parse fallback failed:', error.name, error.message);
+      modernError ||= error;
+    }
   }
-  return text.slice(0,18_000);
+  if (!parsed && /password|encrypted/i.test(String(modernError?.name)+' '+String(modernError?.message))) {
+    throw Object.assign(new Error('This PDF is password-protected. Export an unlocked PDF from LinkedIn and upload it again.'), {status:422,code:'PDF_ENCRYPTED'});
+  }
+  if (!parsed) {
+    throw Object.assign(new Error('This PDF format could not be read. Try LinkedIn’s Save to PDF export (not a screenshot), or paste the About and Experience text.'), {status:422,code:'PDF_PARSE_FAILED'});
+  }
+  if (parsed.text.length < 100) {
+    throw Object.assign(new Error('This PDF has no readable text layer or too little profile text. If it is scanned or a screenshot, export the original LinkedIn PDF or paste the About and Experience text.'), {status:422,code:'PDF_NO_TEXT'});
+  }
+  console.log(`Profile PDF text extracted (${parsed.pages || '?'} pages, ${parsed.text.length} characters).`);
+  return parsed.text.slice(0,18_000);
 }
 function normalizedProfile(url) {
   try {
@@ -386,7 +451,7 @@ const server=createServer(async(req,res)=>{
       }
       const data=await analyzeWithAI({linkedinUrl,profileText,sources,sourceKind});
       json(res,200,data);
-    }catch(err){console.error('Analysis failed:',err.message);json(res,err.status||500,{error:err.status?err.message:'Something went wrong while analyzing this profile.'});}
+    }catch(err){console.error('Analysis failed:',err.message);json(res,err.status||500,{error:err.status?err.message:'Something went wrong while analyzing this profile.',...(err.code?{code:err.code}:{})});}
     return;
   }
   json(res,404,{error:'Not found'});
