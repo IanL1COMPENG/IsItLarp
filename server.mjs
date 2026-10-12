@@ -158,7 +158,7 @@ async function analyzeWithAI({ linkedinUrl, profileText, sources }) {
         responseJsonSchema:outputSchema,
         maxOutputTokens:4096,
       }
-    }),signal:AbortSignal.timeout(55000)
+    }),signal:AbortSignal.timeout(85000)
   });
   if (!response.ok) {
     const raw = await response.text();
