@@ -248,7 +248,7 @@
     profileText.addEventListener('input',()=>{$('count').textContent=`${profileText.value.length.toLocaleString()} / 18,000`;});
     function el(tag,cls,value){const n=document.createElement(tag);if(cls)n.className=cls;if(value!==undefined)n.textContent=String(value);return n;}
     function setLoading(active){$('analyzeBtn').disabled=active;$('btnLabel').textContent=active?'Checking…':'Check profile';$('loading').classList.toggle('visible',active);}
-    function phrase(score){return score>=80?'Very LinkedIn.':score>=60?'Doing a bit much.':score>=40?'Some résumé spin.':score>=20?'Mostly normal.':'Pretty straightforward.';}
+    function phrase(score){return score>=75?'LinkedIn is doing THE most.':score>=55?'The résumé got a little cinematic.':score>=35?'Some serious LinkedIn seasoning.':score>=15?'A little corporate glaze.':'Pretty straightforward.';}
     function render(data,isDemo){
       latest=data;showingDemo=isDemo;
       const score=Math.min(100,Math.max(0,Math.round(Number(data.score)||0)));
@@ -259,7 +259,7 @@
       $('profileHeadline').textContent=data.headline||'';
       $('verdict').textContent=data.verdict||phrase(score);
       $('summary').textContent=data.summary||'Not enough context for a useful analysis.';
-      $('scoreExplanation').textContent=score>=70?'Lots of grand or unspecific language in what was reviewed.':score>=35?'A mix of concrete details and some vague or polished wording.':'Mostly clear and grounded wording in what was reviewed.';
+      $('scoreExplanation').textContent=score>=70?'Heavy corporate seasoning. Judge the presentation, not the person.':score>=35?'Some big talk mixed with actual specifics. Click through the exact quotes below.':'Mostly concrete writing in what was reviewed.';
       $('confidence').textContent=`Evidence confidence: ${String(data.confidence||'low').toLowerCase()}`;
       const school=$('studyContext'),edu=data.educationContext;
       school.replaceChildren();school.hidden=!(edu&&(edu.major!=='Not stated'||edu.yearOfStudy!=='Not stated'));
@@ -271,7 +271,7 @@
       for(const item of (data.signals||[]).slice(0,5)){
         const row=el('div','signal'),top=el('div','signal-top');
         const type=['inflation','vagueness','credibility','unknown'].includes(item.type)?item.type:'unknown';
-        const typeLabels={inflation:'Overstated',vagueness:'Vague',credibility:'Grounded',unknown:'Unclear'};
+        const typeLabels={inflation:'Big talk',vagueness:'LinkedIn-y',credibility:'Receipts',unknown:'Unclear'};
         top.append(el('div','signal-title',item.title||'Observation'),el('span','signal-type '+type,typeLabels[type]));
         row.append(top);
         if(item.evidence)row.append(el('p','signal-quote','“'+item.evidence+'”'));
@@ -330,7 +330,7 @@
     $('againBtn').addEventListener('click',()=>{$('analyzer').scrollIntoView({behavior:'smooth',block:'center'});$('profileUrl').focus({preventScroll:true});});
     $('copyBtn').addEventListener('click',async()=>{
       if(!latest)return;
-      const result=[`Is It Larp? — ${showingDemo?'fictional example':'profile wording check'}`,`${latest.displayName||'Profile'} — ${latest.score}/100 LARP score`,latest.verdict,latest.summary,...(latest.signals||[]).map(s=>`• ${s.title}: ${s.explanation}`),'Score reflects wording only. Not proof of lying or AI authorship.'].join('\n');
+      const result=[`Is It Larp? — ${showingDemo?'fictional example':'profile wording check'}`,`${latest.displayName||'Profile'} — ${latest.score}/100 LARP score`,latest.verdict,latest.summary,...(latest.signals||[]).map(s=>`• ${s.title}: ${s.explanation}`),'Score is for LinkedIn presentation, not proof of lying or AI authorship.'].join('\n');
       try{await navigator.clipboard.writeText(result);$('copyBtn').textContent='Copied';setTimeout(()=>$('copyBtn').textContent='Copy result',1800);}catch{const box=document.createElement('textarea');box.value=result;document.body.append(box);box.select();document.execCommand('copy');box.remove();$('copyBtn').textContent='Copied';setTimeout(()=>$('copyBtn').textContent='Copy result',1800);}
     });
   })();
