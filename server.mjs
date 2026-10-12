@@ -17,7 +17,7 @@ if (existsSync(envPath)) {
 }
 const PORT = Number(process.env.PORT) || 3000;
 const API_KEY = process.env.OPENAI_API_KEY || '';
-const BRAVE_KEY = process.env.BRAVE_SEARCH_API_KEY || '';
+const TAVILY_KEY = process.env.TAVILY_API_KEY || '';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const page = readFileSync(join(ROOT, 'public', 'index.html'));
 const limits = new Map();
@@ -69,28 +69,40 @@ function normalizedProfile(url) {
   } catch { return ''; }
 }
 async function getPublicSnippets(linkedinUrl) {
-  if (!BRAVE_KEY) return [];
+  if (!TAVILY_KEY) return [];
   const slug = new URL(linkedinUrl).pathname.split('/').filter(Boolean).slice(-1)[0];
   const query = `site:linkedin.com/in/ "${slug.replace(/["\\]/g, '')}"`;
-  const url = new URL('https://api.search.brave.com/res/v1/web/search');
-  url.searchParams.set('q', query);
-  url.searchParams.set('count','10');
-  const response = await fetch(url, {
-    headers: { 'Accept':'application/json', 'X-Subscription-Token':BRAVE_KEY },
-    signal:AbortSignal.timeout(12000)
+  const response = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${TAVILY_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      query,
+      search_depth: 'basic',
+      max_results: 10,
+      include_domains: ['linkedin.com'],
+      include_answer: false,
+      include_raw_content: false
+    }),
+    signal: AbortSignal.timeout(12000)
   });
-  if (!response.ok) throw new Error('Public search is currently unavailable.');
+  if (!response.ok) throw new Error(`Public search unavailable (Tavily ${response.status}).`);
   const data = await response.json();
   const expected = normalizedProfile(linkedinUrl);
-  const found = (data.web?.results || []).filter(item => {
+  const found = (data.results || []).filter(item => {
     try {
       const u = new URL(item.url);
       return (u.hostname === 'linkedin.com' || u.hostname.endsWith('.linkedin.com')) &&
         normalizedProfile(item.url) === expected;
     } catch { return false; }
-  }).slice(0,3);
-  return found.map(item => ({ title:String(item.title||'').slice(0,200),url:item.url,
-    description:String(item.description||'').replace(/<[^>]*>/g,' ').slice(0,850) }));
+  }).slice(0, 3);
+  return found.map(item => ({
+    title: String(item.title || '').slice(0, 200),
+    url: item.url,
+    description: String(item.content || '').replace(/<[^>]*>/g, ' ').slice(0, 850)
+  }));
 }
 
 const signalSchema = {
@@ -183,7 +195,7 @@ const server=createServer(async(req,res)=>{
     res.end(page);return;
   }
   if(req.method==='GET' && route==='/api/status'){
-    json(res,200,{aiConfigured:!!API_KEY,publicSearchConfigured:!!BRAVE_KEY,site:'isitlarporno'});return;
+    json(res,200,{aiConfigured:!!API_KEY,publicSearchConfigured:!!TAVILY_KEY,site:'isitlarporno'});return;
   }
   if(req.method==='POST' && route==='/api/analyze'){
     try{
@@ -197,9 +209,9 @@ const server=createServer(async(req,res)=>{
       if(profileText.length>18000){json(res,413,{error:'Please limit pasted text to 18,000 characters.'});return;}
       if(!API_KEY){json(res,503,{error:'Live AI analysis needs an OpenAI API key in the server .env file. The fictional demo is available without one.',code:'AI_NOT_CONFIGURED'});return;}
       let sources=[];
-      if(linkedinUrl&&BRAVE_KEY){
+      if(linkedinUrl&&TAVILY_KEY){
         try {sources=await getPublicSnippets(linkedinUrl);}
-        catch(err){console.warn('Brave Search:',err.message);}
+        catch(err){console.warn('Tavily Search:',err.message);}
       }
       if(!profileText && (sources.map(s=>s.description).join(' ').length<120)){
         json(res,422,{code:'NEED_PROFILE_TEXT',error:'There is not enough accessible public profile text to analyze this URL reliably. Open the profile yourself and paste its About and Experience sections below.'});return;
