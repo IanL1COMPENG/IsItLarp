@@ -18,7 +18,7 @@ if (existsSync(envPath)) {
 const PORT = Number(process.env.PORT) || 3000;
 const API_KEY = process.env.GEMINI_API_KEY || '';
 const TAVILY_KEY = process.env.TAVILY_API_KEY || '';
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 const page = readFileSync(join(ROOT, 'public', 'index.html'));
 const limits = new Map();
 
