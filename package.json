@@ -1,0 +1,9 @@
+{
+  "name": "isitlarporno",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "An AI-assisted, evidence-aware LinkedIn language hype checker",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node server.mjs", "dev": "node --watch server.mjs" }
+}
