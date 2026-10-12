@@ -219,7 +219,7 @@ const outputSchema = {
 };
 const instructions = `You are a strict, evidence-first LinkedIn WRITING STYLE auditor for Is It Larp?.
 Task: spot LARP-style resume language: unnecessarily inflated titles, heavy consulting-speak, template-like prose, excessive polished ChatGPT-style phrasing, and claims of impact with no described scope, action, or outcome.
-This is NOT a truth detector. Never say someone's job was fake, that their job is engineering vs business, that AI was used, or that a person lied. AI authorship cannot be reliably established from prose. Do not infer a person's field, job duties, gender, achievements, or name from context. Retail, service and entry-level work deserves respect; sophisticated wording is not by itself deception.
+This is NOT a truth detector. Never say someone's job was fake, that their job is engineering vs business, that AI was used, or that a person lied. AI authorship cannot be reliably established from prose. Do not infer a person's field, job duties, gender, or achievements from context. When reviewing a LinkedIn PDF export, set displayName to the profile owner's FULL NAME exactly as printed in the document header (never a company, job title, search result, or another person mentioned in the profile). If the name cannot be found in the provided PDF text, set displayName to 'LinkedIn profile'. For non-PDF inputs use 'LinkedIn profile'. Never invent a person's name. Retail, service and entry-level work deserves respect; sophisticated wording is not by itself deception.
 Scan the text thoroughly, not just the first two sentences. Watch for:
 - Long piles of buzzwords with little concrete content (strategic, cross-functional, scalable, innovative, stakeholder, transformative, etc.).
 - Formulaic AI-like openings, canned business clichés, repetitive "passionate about / leveraging / driving impact" language. This is a WRITING PATTERN, NOT PROOF OF AI.
@@ -267,6 +267,43 @@ function labelForSignal(type, evidence) {
   if (type === 'vagueness') return ['Vague description', 'The wording sounds professional but gives limited detail about a particular task or result.'];
   return ['Not enough context', 'This excerpt alone is insufficient to draw a strong conclusion.'];
 }
+// Identify the owner of a user-supplied LinkedIn PDF from its text, not from
+// the URL, filename, search results, or somebody mentioned elsewhere.
+// Gemini proposes a name; the server verifies it is present near the PDF header.
+// If Gemini misses it, only short header lines are considered as a fallback.
+const PROFILE_HEADER_WORDS = /(?<![\p{L}\p{M}])(?:of|and|with|for|from|at|in|on|the|my|our|their|an|a|several|tasks|worked|built|created|designed|developed|details|linkedin|profile|experience|education|summary|contact|skills|endorsements|certifications|languages|publications|projects|recommendations|accomplishments|interests|honors|awards|volunteer|top skills|about|page|resume|curriculum vitae|university|college|management|marketing|engineering|engineer|software|student|analyst|associate|intern|internship|business|sales|operations|specialist|office|project|data|service|scientist|developer|director|consultant|leadership|professional|customer|industry|solutions|strategic|technology|computer)(?![\p{L}\p{M}])/iu;
+function getPdfOwnerName(text, aiName) {
+  const header = String(text || '').slice(0, 3500);
+  const normalized = v => String(v || '').replace(/\s+/g, ' ').trim();
+  const cleanName = value => normalized(value)
+    .replace(/^name\s*:\s*/i, '')
+    .replace(/[“”\"‘’]+/g, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim();
+  const validName = name => {
+    if (name.length < 4 || name.length > 80 || PROFILE_HEADER_WORDS.test(name)) return false;
+    if (/[@\d\/\\|:!?]/.test(name)) return false;
+    // Multiple name components, including accents, initials and apostrophes.
+    return /^[\p{L}\p{M}][\p{L}\p{M}.'’\-]*(?:\s+[\p{L}\p{M}][\p{L}\p{M}.'’\-]*){1,5}$/u.test(name);
+  };
+  const lines = header.split(/\r?\n/).map(cleanName).filter(Boolean);
+  const suggested = cleanName(aiName);
+  if (validName(suggested)) {
+    const found = normalized(header).toLocaleLowerCase().includes(suggested.toLocaleLowerCase());
+    // Gemini sometimes returns a company, job title or someone from the body.
+    // When line breaks are available, prefer a name at the beginning of a line.
+    const looksLikeHeader = lines.slice(0, 45).some(line =>
+      line.toLocaleLowerCase() === suggested.toLocaleLowerCase() ||
+      line.toLocaleLowerCase().startsWith(suggested.toLocaleLowerCase() + ' ')
+    );
+    if (found && looksLikeHeader) return suggested;
+  }
+  // Safe, limited fallback: only guess from the first standalone line. After that, headings and skills
+  // can look like names; it is safer to leave an uncertain name unspecified.
+  const firstLine = lines[0] || '';
+  return validName(firstLine) ? firstLine : 'LinkedIn profile';
+}
+
 function groundedResult(ai, profileText, sources, sourceKind = 'pasted') {
   const pasted = Boolean(profileText);
   // If text is provided, search snippets are never used as evidence.
@@ -362,7 +399,7 @@ function groundedResult(ai, profileText, sources, sourceKind = 'pasted') {
       ? 'In plain English: this profile uses polished, broad wording in the quoted areas. Read the specific duties stated in the text; do not assume a different job, field or level of responsibility.'
       : 'The supplied text does not support a more specific translation of the role. No alternative job duties or credentials have been inferred.';
   return {
-    displayName:'LinkedIn profile', headline:pasted?(sourceKind === 'pdf'?'LinkedIn PDF export':'Review of pasted profile text'):'Limited public search preview',
+    displayName:sourceKind === 'pdf' && pasted ? getPdfOwnerName(profileText, ai?.displayName) : 'LinkedIn profile', headline:pasted?(sourceKind === 'pdf'?'LinkedIn PDF export':'Review of pasted profile text'):'Limited public search preview',
     score, confidence: !pasted || !clean.length || nWords<100?'low': nWords<230?'medium':'high',
     verdict, summary, signals:clean, realityCheck,
     categories:[
