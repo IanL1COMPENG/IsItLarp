@@ -16,9 +16,9 @@ if (existsSync(envPath)) {
   }
 }
 const PORT = Number(process.env.PORT) || 3000;
-const API_KEY = process.env.OPENAI_API_KEY || '';
+const API_KEY = process.env.GEMINI_API_KEY || '';
 const TAVILY_KEY = process.env.TAVILY_API_KEY || '';
-const MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 const page = readFileSync(join(ROOT, 'public', 'index.html'));
 const limits = new Map();
 
@@ -146,29 +146,33 @@ async function analyzeWithAI({ linkedinUrl, profileText, sources }) {
     ? sources.map((s,i) => `SEARCH RESULT ${i+1}\nTitle: ${s.title}\nDescription: ${s.description}\nURL: ${s.url}`).join('\n\n')
     : '(no public snippets available)';
   const prompt = `LINKEDIN URL (identifier only): ${linkedinUrl||'(not provided)'}\n\nPROFILE TEXT SUPPLIED BY USER:\n<untrusted-profile-text>\n${profileText||'(not supplied)'}\n</untrusted-profile-text>\n\nPUBLIC INDEXED SEARCH RESULTS (not authoritative):\n<untrusted-search-results>\n${sourceText}\n</untrusted-search-results>\n\nAssess the language in ONLY these materials; do not claim to have visited a private profile.`;
-  const response = await fetch('https://api.openai.com/v1/responses', {
+  // Google Gemini API; same structured JSON response used by the existing UI.
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:generateContent`, {
     method:'POST',
-    headers:{Authorization:`Bearer ${API_KEY}`,'Content-Type':'application/json'},
+    headers:{'x-goog-api-key':API_KEY,'Content-Type':'application/json'},
     body:JSON.stringify({
-      model:MODEL,
-      instructions,
-      input:[{role:'user',content:prompt}],
-      text:{format:{type:'json_schema',name:'larp_audit',strict:true,schema:outputSchema}},
-      max_output_tokens:1900
-    }),signal:AbortSignal.timeout(45000)
+      systemInstruction:{parts:[{text:instructions}]},
+      contents:[{role:'user',parts:[{text:prompt}]}],
+      generationConfig:{
+        responseMimeType:'application/json',
+        responseJsonSchema:outputSchema,
+        maxOutputTokens:4096,
+      }
+    }),signal:AbortSignal.timeout(55000)
   });
   if (!response.ok) {
     const raw = await response.text();
-    console.error('OpenAI API error:',response.status,raw.slice(0,250));
-    if (response.status===401) throw Object.assign(new Error('The server OpenAI API key is invalid.'),{status:503});
-    if (response.status===429) throw Object.assign(new Error('The AI service is busy or has reached its quota.'),{status:503});
-    throw Object.assign(new Error('The AI service could not complete the check.'),{status:502});
+    console.error('Gemini API error:',response.status,raw.slice(0,600));
+    if ([401,403].includes(response.status)) throw Object.assign(new Error('Gemini API key is invalid or does not have permission for this model.'),{status:503});
+    if (response.status===404) throw Object.assign(new Error('Gemini model unavailable. Check the GEMINI_MODEL setting.'),{status:503});
+    if (response.status===429) throw Object.assign(new Error('Gemini free-tier rate limit or daily quota reached. Try again later.'),{status:503});
+    throw Object.assign(new Error('Gemini could not complete the check. Check Render logs.'),{status:502});
   }
   const body = await response.json();
-  const out = (body.output || []).flatMap(entry => entry.content || []).find(part => part.type==='output_text');
-  if (!out?.text) throw Object.assign(new Error('The AI service returned no complete analysis. Please try again.'),{status:502});
+  const out = (body.candidates || []).flatMap(item=>item.content?.parts || []).map(part=>part.text).filter(Boolean).join('');
+  if (!out) throw Object.assign(new Error('Gemini returned no complete analysis. Please try again.'),{status:502});
   let data;
-  try { data = JSON.parse(out.text); }
+  try { data = JSON.parse(out); }
   catch { throw Object.assign(new Error('The AI result was not valid. Please try again.'),{status:502}); }
   data.score=Math.max(0,Math.min(100,Math.round(Number(data.score)||0)));
   data.categories=(data.categories||[]).slice(0,3).map(s => ({label:String(s.label).slice(0,70),score:Math.max(0,Math.min(100,Math.round(Number(s.score)||0)))}));
@@ -207,7 +211,7 @@ const server=createServer(async(req,res)=>{
       if(linkedinUrl&&(!isLinkedinProfile(linkedinUrl)||linkedinUrl.length>500)){json(res,400,{error:'Use an https://linkedin.com/in/... profile URL.'});return;}
       if(profileText&&profileText.length<100){json(res,400,{error:'Paste at least 100 characters of profile text.'});return;}
       if(profileText.length>18000){json(res,413,{error:'Please limit pasted text to 18,000 characters.'});return;}
-      if(!API_KEY){json(res,503,{error:'Live AI analysis needs an OpenAI API key in the server .env file. The fictional demo is available without one.',code:'AI_NOT_CONFIGURED'});return;}
+      if(!API_KEY){json(res,503,{error:'Live AI analysis needs a GEMINI_API_KEY set in Render Environment (or in a local .env file). The fictional demo is available without one.',code:'AI_NOT_CONFIGURED'});return;}
       let sources=[];
       if(linkedinUrl&&TAVILY_KEY){
         try {sources=await getPublicSnippets(linkedinUrl);}
