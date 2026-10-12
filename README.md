@@ -1,55 +1,18 @@
-# Is It Larp?
+# Is It Larp? — Full Profile PDF version
 
-A minimal, low-key LinkedIn **hype and résumé-inflation checker** with AI-powered text analysis. White background, one URL field, plain results.
+This fixes the misleading URL-only analysis. A LinkedIn URL does not grant the app access to login-protected LinkedIn profile content. The website now supports user-provided profile PDFs exported through LinkedIn's own **More → Save to PDF** tool, and still accepts pasted text. URL-only public search snippets are used **only with explicit opt-in**, labeled as incomplete.
 
-The score is a **subjective 0–100 wording/hype index**, **not** a probability that someone lied, used AI, or falsified credentials. The site respects legitimate retail and entry-level work.
+## Update your existing GitHub repository
+Replace **three files** at their respective paths:
+- `server.mjs` at repository root
+- `package.json` at repository root
+- `public/index.html` inside the existing `public` folder
 
-## Quick start
+Commit to GitHub. Render should auto-deploy. Render Build Command: `npm install`, Start Command: `npm start`. Keep the same `GEMINI_API_KEY`, `GEMINI_MODEL` (if set), and optional `TAVILY_API_KEY`. No new API keys.
 
-1. Install **Node.js 20 or newer**. No npm packages are needed. On Windows, you can double-click `start-windows.bat` after unzipping.
-2. Copy `.env.example` to `.env`.
-3. In `.env`, set your own `OPENAI_API_KEY` (required for real analysis).
-4. Optionally set `BRAVE_SEARCH_API_KEY` (to retrieve publicly indexed snippets when you enter a URL alone).
-5. In the `isitlarporno` folder, double-click `start-windows.bat` (Windows) or run:
+## On your website
+Open a LinkedIn profile on desktop. Click **More** or **Resources** → **Save to PDF** (if available). Return to your website, choose **Upload LinkedIn PDF**, and check the profile. The text is extracted from the provided PDF and only exact quoted excerpts can appear in result flags. The server does **not** store the uploaded PDF; it uses it during the analysis request.
 
-   ```bash
-   npm start
-   ```
+If a profile doesn't offer Save to PDF, you can paste the About and Experience text instead. Imported PDFs are not proof that a claim is true and may omit portions of a profile. Scoring remains a critique of wording, not a fraud/AI authorship detector.
 
-6. Visit **http://localhost:3000**.
-
-The **fictional example verdict** works without API keys. For a live AI check, use the profile text field. With both keys set, URL-only checks are attempted against public search results, but will politely ask for text when not enough material is available.
-
-## Why can't it read every LinkedIn URL?
-
-LinkedIn often restricts access to profiles and its rules prohibit unauthorized scraping. This project **does not scrape LinkedIn** or bypass sign-in restrictions. It uses user-provided profile text and can optionally fetch search-index snippets through Brave Search. Search snippets are not identity verification or proof of employment. If public results are insufficient, the app requests the About/Experience text instead of fabricating a score.
-
-## What the AI does
-
-- Checks title inflation and exaggerated claims based on the supplied text.
-- Calls out generic corporate language and missing specifics.
-- Credits concrete duties, metrics, responsibilities and results.
-- Returns short evidence quotes, confidence level, plain-English translations and a 0–100 subjective hype score.
-- **Does not detect AI authorship with certainty, verify employment, or determine dishonesty.**
-
-## Files
-
-- `public/index.html` — complete responsive frontend, including a no-API-key fictional demo.
-- `server.mjs` — zero-dependency Node backend for OpenAI's Responses API and optional Brave web search.
-- `.env.example` — safe template for server-side keys.
-- `.gitignore` — prevents accidental publishing of `.env`.
-
-## Deployment
-
-Deploy to a **Node-compatible host** and set `OPENAI_API_KEY` and optionally `BRAVE_SEARCH_API_KEY` as *server-side environment variables*. The default start command is `npm start`, and the server respects the `PORT` environment variable.
-
-**GitHub Pages alone is not enough for real AI analysis**, since it cannot run the Node backend. It can only host a static version of the site (including the fictional demo).
-
-## Technical notes
-
-- No profiles are saved in a database or publicly shared by the app.
-- Keys are never sent to the browser.
-- In-memory IP-based request limit of 15 checks per hour for basic protection (use real API gateway limits for production).
-- Content is rendered as text, not unsanitized HTML.
-- AI input is treated as untrusted; prompt injection and hallucinations remain general model limitations.
-- Review privacy terms, privacy policy, analytics policy, moderation and third-party API costs before a public launch.
+Note: LinkedIn limits who can use Save to PDF and PDF exports may not include every section. Avoid posting or sharing third parties' nonpublic information without permission.

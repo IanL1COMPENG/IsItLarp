@@ -53,7 +53,7 @@ async function readJson(req) {
   let collected = '';
   for await (const chunk of req) {
     collected += chunk.toString();
-    if (collected.length > 90_000) {
+    if (collected.length > 7_100_000) {
       const err = new Error('Submitted text is too long.');
       err.status = 413;
       throw err;
@@ -61,6 +61,31 @@ async function readJson(req) {
   }
   try { return JSON.parse(collected); }
   catch { const err = new Error('Invalid JSON request.'); err.status = 400; throw err; }
+}
+// The PDF comes directly from the user's browser, not an automated LinkedIn scrape.
+// No file is persisted. The extracted text is treated the same as pasted text.
+async function extractProfilePdf(base64) {
+  if (typeof base64 !== 'string' || base64.length < 100 || base64.length > 6_700_000 ||
+      !/^[A-Za-z0-9+/=\s]+$/.test(base64)) {
+    throw Object.assign(new Error('Upload a PDF under 5 MB.'), {status:413});
+  }
+  const bytes = Buffer.from(base64, 'base64');
+  if (bytes.length > 5_000_000 || bytes.subarray(0,5).toString('ascii') !== '%PDF-') {
+    throw Object.assign(new Error('That file is not a valid PDF under 5 MB.'), {status:400});
+  }
+  let parsed;
+  try {
+    const pdfParse = (await import('pdf-parse')).default;
+    parsed = await pdfParse(bytes, {max:20});
+  } catch (error) {
+    console.error('Profile PDF extraction failed:',error.message);
+    throw Object.assign(new Error('Could not read the PDF. Try downloading it again, or paste the profile text instead.'), {status:422});
+  }
+  const text = String(parsed.text || '').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+  if (text.length < 100) {
+    throw Object.assign(new Error('This PDF has too little readable text. Paste the About and Experience sections instead.'), {status:422});
+  }
+  return text.slice(0,18_000);
 }
 function normalizedProfile(url) {
   try {
@@ -177,7 +202,7 @@ function labelForSignal(type, evidence) {
   if (type === 'vagueness') return ['Vague description', 'The wording sounds professional but gives limited detail about a particular task or result.'];
   return ['Not enough context', 'This excerpt alone is insufficient to draw a strong conclusion.'];
 }
-function groundedResult(ai, profileText, sources) {
+function groundedResult(ai, profileText, sources, sourceKind = 'pasted') {
   const pasted = Boolean(profileText);
   // If text is provided, search snippets are never used as evidence.
   const passages = pasted ? [profileText] : sources.map(s => s.description).filter(Boolean);
@@ -272,7 +297,7 @@ function groundedResult(ai, profileText, sources) {
       ? 'In plain English: this profile uses polished, broad wording in the quoted areas. Read the specific duties stated in the text; do not assume a different job, field or level of responsibility.'
       : 'The supplied text does not support a more specific translation of the role. No alternative job duties or credentials have been inferred.';
   return {
-    displayName:'LinkedIn profile', headline:pasted?'Review of pasted profile text':'Limited public search preview',
+    displayName:'LinkedIn profile', headline:pasted?(sourceKind === 'pdf'?'LinkedIn PDF export':'Review of pasted profile text'):'Limited public search preview',
     score, confidence: !pasted || !clean.length || nWords<100?'low': nWords<230?'medium':'high',
     verdict, summary, signals:clean, realityCheck,
     categories:[
@@ -283,7 +308,7 @@ function groundedResult(ai, profileText, sources) {
     sources:pasted?[]:sources.map(s=>({title:s.title,url:s.url}))
   };
 }
-async function analyzeWithAI({ linkedinUrl, profileText, sources }) {
+async function analyzeWithAI({ linkedinUrl, profileText, sources, sourceKind = 'pasted' }) {
   // Searching and pasted profile text must NEVER be blended: it can cause
   // unrelated web snippets to be attributed to the pasted profile.
   const selected = profileText ? [] : sources;
@@ -291,7 +316,7 @@ async function analyzeWithAI({ linkedinUrl, profileText, sources }) {
     ? selected.map((s,i) => `MATCHED URL SEARCH PREVIEW ${i+1} (unverified, may be stale)\nDescription: ${s.description}\nURL: ${s.url}`).join('\n\n')
     : '(no indexed previews available)';
   const prompt = `LINKEDIN URL (identifier only, not evidence): ${linkedinUrl||'(not provided)'}\n\n`
-    + (profileText ? `USER-PASTED PROFILE TEXT — sole evidence:\n<untrusted-profile-text>\n${profileText}\n</untrusted-profile-text>`
+    + (profileText ? `${sourceKind === 'pdf' ? 'TEXT EXTRACTED FROM LINKEDIN PDF EXPORT' : 'USER-PASTED PROFILE TEXT'} — sole evidence:\n<untrusted-profile-text>\n${profileText}\n</untrusted-profile-text>`
       : `SEARCH ENGINE PREVIEWS — incomplete context, NOT verified live profile text:\n<untrusted-search-results>\n${sourceText}\n</untrusted-search-results>`)
     + '\n\nOnly cite exact contiguous excerpts from the source text; do not infer occupations, schools, or projects that are not directly written.';
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:generateContent`, {
@@ -318,7 +343,7 @@ async function analyzeWithAI({ linkedinUrl, profileText, sources }) {
   let data;
   try { data = JSON.parse(out); }
   catch { throw Object.assign(new Error('The AI result was not valid. Please try again.'),{status:502}); }
-  return groundedResult(data, profileText, selected);
+  return groundedResult(data, profileText, selected, sourceKind);
 }
 
 const server=createServer(async(req,res)=>{
@@ -335,11 +360,21 @@ const server=createServer(async(req,res)=>{
       if(!applyRateLimit(req.socket.remoteAddress||'unknown')) {json(res,429,{error:'Too many requests. Please try again later.',code:'RATE_LIMIT'});return;}
       const body=await readJson(req);
       const linkedinUrl=typeof body.url==='string'?body.url.trim():'';
-      const profileText=typeof body.profileText==='string'?body.profileText.trim():'';
-      if(!linkedinUrl&&!profileText){json(res,400,{error:'Provide a LinkedIn URL or pasted profile text.'});return;}
+      let profileText=typeof body.profileText==='string'?body.profileText.trim():'';
+      const pdfBase64=typeof body.pdfBase64==='string'?body.pdfBase64:'';
+      const previewOnly=body.mode==='search_preview';
+      if (profileText && pdfBase64){json(res,400,{error:'Use either a PDF or pasted text, not both.'});return;}
+      const sourceKind=pdfBase64?'pdf':'pasted';
+      if(!linkedinUrl&&!profileText&&!pdfBase64){json(res,400,{error:'Provide a LinkedIn URL, PDF export, or pasted profile text.'});return;}
       if(linkedinUrl&&(!isLinkedinProfile(linkedinUrl)||linkedinUrl.length>500)){json(res,400,{error:'Use an https://linkedin.com/in/... profile URL.'});return;}
       if(profileText&&profileText.length<100){json(res,400,{error:'Paste at least 100 characters of profile text.'});return;}
       if(profileText.length>18000){json(res,413,{error:'Please limit pasted text to 18,000 characters.'});return;}
+      if(pdfBase64) profileText=await extractProfilePdf(pdfBase64);
+      // A bare LinkedIn URL cannot authenticate into someone's profile.
+      // Only show search previews when the user explicitly opts in.
+      if(linkedinUrl&&!profileText&&!previewOnly){
+        json(res,422,{code:'NEED_PROFILE_TEXT',error:'A LinkedIn URL alone cannot open the full profile. On LinkedIn desktop, use More → Save to PDF and upload it here, or paste the About and Experience text. You can also opt into a limited public search preview.'});return;
+      }
       if(!API_KEY){json(res,503,{error:'Live AI analysis needs a GEMINI_API_KEY set in Render Environment (or in a local .env file). The fictional demo is available without one.',code:'AI_NOT_CONFIGURED'});return;}
       let sources=[];
       if(linkedinUrl&&TAVILY_KEY&&!profileText){
@@ -349,7 +384,7 @@ const server=createServer(async(req,res)=>{
       if(!profileText && (sources.map(s=>s.description).join(' ').length<200)){
         json(res,422,{code:'NEED_PROFILE_TEXT',error:'There is not enough accessible public profile text to analyze this URL reliably. Open the profile yourself and paste its About and Experience sections below.'});return;
       }
-      const data=await analyzeWithAI({linkedinUrl,profileText,sources});
+      const data=await analyzeWithAI({linkedinUrl,profileText,sources,sourceKind});
       json(res,200,data);
     }catch(err){console.error('Analysis failed:',err.message);json(res,err.status||500,{error:err.status?err.message:'Something went wrong while analyzing this profile.'});}
     return;
