@@ -228,7 +228,7 @@ const outputSchema = {
   },
   required:['displayName','headline','score','confidence','verdict','summary','signals','realityCheck','education','categories']
 };
-const instructions = `You are an evidence-first, skeptical but FAIR LinkedIn claim-and-language reviewer for "Is It Larp?".
+const instructions = `You are an evidence-first, skeptical and PLAYFULLY SASSY LinkedIn claim-and-language reviewer for "Is It Larp?".
 Judge the way claims are PRESENTED, not whether a person is honest. This is not an AI authorship detector, background check, academic verification service, or hiring assessment. Never label anyone a liar, fraud, AI user or unqualified.
 
 Read the WHOLE supplied profile, including header, Education, Experience, projects, volunteer roles and Skills. Critically compare the SCALE OF EACH CLAIM with stated role, actual described tasks, ownership and dates. Do not use web snippets or knowledge about the person beyond the supplied text.
@@ -238,7 +238,7 @@ Find patterns such as:
 2. Responsibility/scope inflation: claiming sole architectural ownership, enterprise-wide scale, 'transformed' an industry, company-level strategic leadership or huge metrics without describing what they personally did. Without supporting details, this is UNVERIFIED PRESENTATION, not falsehood. Account for student organizations, projects, startups, school labs and small teams; they can have actual leads/founders.
 3. Expertise overclaim: "expert," "mastered," "years of production experience" without matching projects, employer experience or proficiency evidence. A list of tools/skills alone is NORMAL and NOT suspicious. React, Node.js, Python, AI/ML, Docker, FPGA, quantum computing, cybersecurity etc can be learned at ANY age through independent study, classes, internships, hobby projects or high school. Never flag ANY technology merely because of a college major or freshman status. The fact a tool can generate code is NOT evidence the person cannot code.
 4. Timeline QUESTIONS: highlight only explicit relevant dates or directly conflicting position/education claims in the provided text, and include a second literal excerpt showing the competing date/context. Never assume a four-year degree timeline, course prerequisites, individual age, actual graduation or prior experience. If the year is unknown, DO NOT infer it. "Freshman" plus using React is NOT a timeline inconsistency.
-5. Template/AI-LIKE writing: repeated generic phrases, "passionate about leveraging," "driving transformative impact," non-specific stakeholder/innovation language, symmetrical generic bullet points, artificial-sounding platitudes. Flag as boilerplate WORDING, not as proof of AI authorship.
+5. Template/AI-LIKE writing: "passionate about building scalable software", "creating meaningful impact", "projects that solve real problems", vague mission statements, repeated generic phrases, "passionate about leveraging," "driving transformative impact," non-specific stakeholder/innovation language, symmetrical generic bullet points, artificial-sounding platitudes. Flag as boilerplate WORDING, not as proof of AI authorship.
 6. Grounded examples: actual tools used with HOW, named project deliverables, responsibilities, measurable outcomes explained, team size and ownership, concrete limits and timeframe. These weigh in the profile's favor, but do not independently verify facts.
 
 EDUCATION EXTRACTION: Find their major and explicit year of study (freshman/first-year, sophomore/second-year, junior, senior, graduate etc) IF the user-supplied profile actually says them. Return the exact supporting quote for each in education.majorEvidence and education.yearEvidence. If absent, all matching fields must be empty strings. Never derive 'sophomore' from a graduation year or assume major from tech projects. Never derive education from a company/job title. If the file only contains 'Class of 2029', leave yearOfStudy blank, although the graduate year can be mentioned in an explanatory signal ONLY if context requires it and is directly quoted.
@@ -249,7 +249,7 @@ Pick type='inflation' for a genuinely strong discrepancy or unusually grand lang
 
 Return a 0-100 RHETORICAL OVERCLAIM/BOILERPLATE score, NOT a probability of lying/AI. Score 70+ only with several distinct, well-supported examples. For freshman/major, NEVER raise the score on year or field alone. If the material is limited search snippets, be conservative and admit uncertainty.
 
-Keep explanations plain, precise and short. Do not invent alternative "real jobs" or accomplishments not expressly present. The server will validate evidence and generate its own careful explanations. Category labels are Title inflation, Buzzword density, Missing specifics. Return only JSON per the schema.`;
+Keep explanations plain, precise, lightly funny about WORDING (not mocking the person): e.g. "LinkedIn poetry" or "Needs some receipts". Respect truthful internships and career progress. A huge result can be genuine, but ask who measured it and what the individual did. Be alert to claims that span large teams, sudden senior scope, and academic/career timing; no expertise is impossible merely because of college year. Do not invent alternative "real jobs" or accomplishments not expressly present. The server will validate evidence and generate its own careful explanations. Category labels are Title inflation, Buzzword density, Missing specifics. Return only JSON per the schema.`;
 
 // Discrete passages are used for exact quote matching. Avoid matching
 // strings created by accidentally joining unrelated search results.
@@ -264,6 +264,88 @@ function matchQuote(quote, passages) {
     if (index >= 0) return raw.slice(index, index + whitespace(q).length);
   }
   return null;
+}
+
+// Plain, deterministic observations run even if Gemini returns an empty signal list.
+// Each quote is found in the uploaded/profile text itself, never constructed
+// from an outside profile, guessed achievement, or unverifiable AI claim.
+function exactWindow(text, regex, before=7, after=22) {
+  const flat=String(text).replace(/\s+/g,' ').trim();
+  const match=regex.exec(flat);
+  if(!match)return null;
+  let start=Math.max(0,match.index-before);
+  let end=Math.min(flat.length,match.index+match[0].length+after);
+  if(start>0){const i=flat.indexOf(' ',start);if(i<match.index && i!==-1) start=i+1;}
+  if(end<flat.length){const i=flat.lastIndexOf(' ',end);if(i>match.index+match[0].length)end=i;}
+  return flat.slice(start,Math.min(start+165,end)).trim();
+}
+const HYPE_RULES = [
+  {id:'meaningful-impact',rx:/\b(?:software|solutions|technology|tools|products)\s+that\s+(?:creates?|drives?|delivers?|makes?|generates?)\s+(?:a\s+)?meaningful\s+impact\b/i,
+   title:'Meaningful impact™',basis:'ai_style',points:12,
+   explanation:'The classic LinkedIn closing sentence. Sounds nice, says almost nothing about the actual result. This is a writing critique, not a lie detector.'},
+  {id:'passionate-scalable',rx:/\bpassionate\s+about\s+building\s+scalable\b/i,
+   title:'Corporate poetry',basis:'ai_style',points:12,
+   explanation:'Passionate, scalable, software: the résumé buzzword starter pack. Tell us what scaled and who used it.'},
+  {id:'solve-real-problems',rx:/\b(?:projects?|solutions?)\s+that\s+solve\s+real(?:-world)?\s+problems\b/i,
+   title:'Real-world problems™',basis:'ai_style',points:5,
+   explanation:'A pretty generic introduction. If the profile names a project right after this, that is genuinely useful context.'},
+  {id:'significant-gain',rx:/\b(?:significantly|substantially)\s+(?:reduced|improved|increased|streamlined)\s+(?:(?:engineering|test|review|processing)\s+){0,3}(?:testing\s+time|workflows?|efficiency|processes?)\b/i,
+   title:'Big-impact wording',basis:'vague_impact',points:8,
+   explanation:'That is a strong-sounding result. The work may be real; the profile alone cannot show how the improvement was measured or attributed.'},
+  {id:'intuitive-interface',rx:/\bcreat(?:ing|ed)\s+an\s+intuitive\s+interface\b/i,
+   title:'Intuitive according to whom?',basis:'buzzwords',points:5,
+   explanation:'"Intuitive" is a product claim without user-testing details. The frontend work itself is described concretely.'},
+  {id:'transformative',rx:/\b(?:transformative\s+impact|revolutioni[sz](?:ed|ing)\s+.{0,35}|spearheaded\s+strategic\s+initiatives)\b/i,
+   title:'LinkedIn inflation alert',basis:'responsibility_scope',points:13,
+   explanation:'Very large language. What did this person own, ship, or measure? Avoid inferring the claim is false.'}
+];
+// A quantifiable improvement is GOOD resume practice. A very large one is
+// worth a gentle verification question, not an assertion that it is made up.
+const BIG_METRIC_RX=/\b(?:reduc(?:ed|ing)|cut|decreas(?:ed|ing))\s+(?:.{0,55}?\s+)?(?:testing|processing|deployment|review|build)\s+time\s+from\s+.{0,30}?\s+to\s+(?:under|less\s+than|~|about|approximately)?\s*\d+/i;
+function supplementalSignals(passages, sourceKind) {
+  if(!passages.length) return [];
+  const signals=[];
+  for(const passage of passages){
+    for(const rule of HYPE_RULES){
+      const q=exactWindow(passage,rule.rx,0,0);
+      if(!q || !matchQuote(q,[passage]))continue;
+      if(signals.some(s=>s.ruleId===rule.id))continue;
+      signals.push({type:'vagueness',basis:rule.basis,title:rule.title,evidence:q,
+        contextEvidence:'',explanation:rule.explanation,points:rule.points,ruleId:rule.id});
+    }
+    const metric=exactWindow(passage,BIG_METRIC_RX,0,8);
+    if(metric && matchQuote(metric,[passage]))signals.push({type:'vagueness',basis:'vague_impact',
+      title:'That number is doing cardio',evidence:metric,contextEvidence:'',points:9,ruleId:'big-metric',
+      explanation:'Impressive if accurate. Was that the whole team’s improvement or this person’s specific contribution? The PDF cannot verify the number.'});
+  }
+  // Balance the roast with a literal, demonstrable description of work.
+  const concrete=/\b(?:designed and built|wrote and deployed|created and tested|developed and deployed)\s+(?:.{0,65}?\s+)?(?:frontend|application|app|website|project|testing tool|API)\b/i;
+  for(const passage of passages){
+    const quote=exactWindow(passage,concrete,0,42);
+    if(quote && matchQuote(quote,[passage])){
+      signals.push({type:'credibility',basis:'concrete_detail',title:'Okay, actual work',
+       evidence:quote,contextEvidence:'',points:0,ruleId:'concrete-work',
+       explanation:'This names something the person says they built. Useful context, though a PDF cannot independently verify it.'});
+      break;
+    }
+  }
+  if(sourceKind==='pdf' || sourceKind==='pasted') {
+    const full=passages.join('\n').replace(/\s+/g,' ');
+    // Only flag the uncommon timing pattern when BOTH start dates are explicitly
+    // present. This does not assume the person lacked prior technical skills.
+    const edu=/\bBachelor(?:\s+of\s+(?:Science|Arts|Engineering))?[^\n]{0,140}?\(?(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d\d)\s*-\s*(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+20\d\d\)?/i.exec(full);
+    const internship=/\b(?:Software\s+Engineer(?:ing)?|Data\s+(?:Science|Engineering)|Product|Technology|Investment\s+Banking)[^\n]{0,35}?Intern\b[\s\S]{0,125}?\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d\d)\s*-\s*(?:Present|Current|\w+\s+20\d\d)\b/i.exec(full);
+    if(edu && internship && edu[1]===internship[1]) {
+      const edQuote=exactWindow(full,/\bBachelor(?:\s+of\s+(?:Science|Arts|Engineering))?[^\n]{0,140}?\(?(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+20\d\d\s*-\s*(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+20\d\d\)?/i,0,0);
+      const internQuote=exactWindow(full,/\b(?:Software\s+Engineer(?:ing)?|Data\s+(?:Science|Engineering)|Product|Technology|Investment\s+Banking)[^\n]{0,35}?Intern\b[\s\S]{0,125}?\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+20\d\d\s*-\s*(?:Present|Current|\w+\s+20\d\d)\b/i,0,0);
+      if(edQuote && internQuote && matchQuote(edQuote,passages) && matchQuote(internQuote,passages)) {
+        signals.push({type:'vagueness',basis:'timeline_question',title:'Career-timeline speedrun?',
+          evidence:internQuote,contextEvidence:edQuote,points:7,ruleId:'timeline-review',
+          explanation:'The internship and degree both start in the same year. That can absolutely happen, but it is reasonable to ask how the opportunity fits the timeline, not declare it fake.'});
+      }
+    }
+  }
+  return signals;
 }
 
 // Template-like phrasing is a style clue only, not an AI authorship signature.
@@ -319,9 +401,25 @@ function verifiedEducation(aiEducation, passages, pasted) {
     const explicitlyAcademic=/\b(?:student|school|college|university|undergraduate|year of study|year student|academic)\b/i.test(yearEvidence);
     if(match && (!looksLikeJobTitle || explicitlyAcademic))yearOfStudy=match[0];
   }
+  // When the degree includes start/end months, it is reasonable to display
+  // an ESTIMATED study year. Never turn that estimate into a skills ceiling.
+  let estimated=false;
+  const flat=passages.join(' ').replace(/\s+/g,' ');
+  const degree=/\bBachelor\s+of\s+(?:Science|Arts|Engineering)(?:,\s*([^·()]{4,100}?))?\s*[·(]\s*\(?(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{2})\s*-\s*(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+20\d{2}/i.exec(flat);
+  if(degree){
+    if(!major && degree[1])major=degree[1].trim().replace(/\s+/g,' ').slice(0,75);
+    if(!yearOfStudy){
+      const months=['january','february','march','april','may','june','july','august','september','october','november','december'];
+      const month=months.indexOf(degree[2].toLowerCase());
+      const year=Number(degree[3]);
+      const now=new Date();
+      const elapsed=now.getUTCFullYear()-year-(now.getUTCMonth()<month?1:0);
+      if(elapsed>=0 && elapsed<=3){yearOfStudy=['First year','Second year','Third year','Fourth year'][elapsed]+' (estimated)';estimated=true;}
+    }
+  }
   return major||yearOfStudy ? {
     major:major||'Not stated', yearOfStudy:yearOfStudy||'Not stated',
-    note:'Year and major provide context, not a skills ceiling. Skills may come from classes, work, personal projects or independent study.'
+    note:estimated?'Study year is estimated from the degree start date, not explicitly stated. It does not limit what someone can learn before college.':'Major and year give context, not a skills ceiling. Experience may predate college.'
   }:null;
 }
 // Identify the owner of a user-supplied LinkedIn PDF from its text, not from
@@ -406,59 +504,66 @@ function groundedResult(ai, profileText, sources, sourceKind='pasted') {
     findings.push({type,basis,title,evidence,contextEvidence,explanation});
     if(findings.length===7)break;
   }
-  // A small, literal-pattern backstop catches boilerplate Gemini may skip.
-  // Never use this to claim the person used AI.
-  if(findings.length<7){
-    for(const p of CLICHES){
-      const passage=passages.find(t=>p.test(t));if(!passage)continue;
-      const hit=p.exec(passage);if(!hit)continue;
-      let start=Math.max(0,hit.index-25);const end=Math.min(passage.length,hit.index+Math.max(65,hit[0].length));
-      if(!/\s/.test(passage[start])&&start>0){const i=passage.indexOf(' ',start);if(i<hit.index&&i!==-1)start=i+1;}
-      const quote=passage.slice(start,end).trim();
-      if(quote.length<10||!matchQuote(quote,passages)||findings.some(s=>s.evidence.toLowerCase().includes(hit[0].toLowerCase())))continue;
-      const [title,explanation]=labelForSignal('vagueness','ai_style',false);
-      findings.push({type:'vagueness',basis:'ai_style',title,evidence:quote,contextEvidence:'',explanation});
-      if(findings.length>=7)break;
+  // Rules run after grounded Gemini signals: the model cannot veto a literal
+  // buzzword/metric because it preferred to return 0 or only positive bullets.
+  for (const fallback of supplementalSignals(passages,sourceKind)) {
+    if(findings.some(f=>f.evidence.toLowerCase()===fallback.evidence.toLowerCase()))continue;
+    // Separate phrases in the same Summary can each be fair style observations.
+    if(matchQuote(fallback.evidence,passages)) findings.push(fallback);
+  }
+  // Also keep the broader generic-language backstop from the earlier version.
+  // A model returning zero signals should not turn a paragraph of buzzwords
+  // into a zero-score profile.
+  for(const rx of CLICHES){
+    for(const passage of passages){
+      const q=exactWindow(passage,rx,8,20);
+      if(!q || !matchQuote(q,[passage]))continue;
+      if(findings.some(f=>f.evidence.toLowerCase().includes(q.toLowerCase())||
+           q.toLowerCase().includes(f.evidence.toLowerCase())))continue;
+      findings.push({type:'vagueness',basis:'ai_style',title:'LinkedIn phrase generator',
+        evidence:q,contextEvidence:'',points:10,ruleId:'generic-cliche',
+        explanation:'This is a résumé cliché, not a description of work. Humans write this too; the phrasing is what is getting roasted.'});
     }
   }
   // Re-rank so useful questions are shown before generic positive details.
-  const weight={timeline_question:6,title_scope:5,responsibility_scope:5,expertise_claim:4,vague_impact:3,ai_style:2,buzzwords:2,concrete_detail:1,unknown:0};
-  findings.sort((a,b)=>(a.type==='credibility'?0:(weight[a.basis]||0))-(b.type==='credibility'?0:(weight[b.basis]||0))).reverse();
+  const weight={timeline_question:5,title_scope:6,responsibility_scope:6,expertise_claim:5,vague_impact:4,ai_style:5,buzzwords:3,concrete_detail:1,unknown:0};
+  findings.sort((a,b)=>(b.type==='credibility'?0:(weight[b.basis]||0)+(b.points||0)/10)-(a.type==='credibility'?0:(weight[a.basis]||0)+(a.points||0)/10));
   const limited=[];let positiveCount=0;
-  for(const f of findings){if(f.type==='credibility'&&positiveCount++>=2)continue;limited.push(f);if(limited.length===6)break;}
+  for(const f of findings){if(f.type==='unknown')continue;if(f.type==='credibility'&&positiveCount++>=1)continue;limited.push(f);if(limited.length===7)break;}
   const neg=limited.filter(s=>s.type==='inflation'||s.type==='vagueness');
   const positives=limited.filter(s=>s.type==='credibility');
   const overclaims=neg.filter(s=>s.type==='inflation');
   const compared=neg.filter(s=>s.contextEvidence);
   const actionable=/\b(?:built|created|wrote|handled|processed|designed|maintained|assisted|taught|organized|configured|tested|fixed|implemented|shipped|prepared|developed|prototyped|delivered|published|deployed|completed)\b/i.test(corpus);
   const uniqueBases=new Set(neg.map(s=>s.basis));
-  // Transparent, bounded rubric; the model's free-floating numeric estimate is
-  // deliberately not used. A freshman listing Node.js gets no penalty.
-  let score=neg.reduce((t,s)=>t+(s.type==='inflation'?s.contextEvidence?22:15: s.basis==='ai_style'?9:11),0);
-  score+=Math.min(20,patterns*3);
-  if(overclaims.length>=2)score+=8;
-  if(compared.length>=2)score+=5;
-  if(uniqueBases.size>=3)score+=6;
-  score-=Math.min(14,positives.length*5+(actionable?4:0));
+  // This is a spicy writing/presentation score. It is NOT a fraud score.
+  // Details do not cancel out clichéd copy: a genuinely technical profile can
+  // contain excellent bullets AND a heavily inflated-sounding About section.
+  let score=neg.reduce((t,s)=>t+(Number.isFinite(s.points)?s.points:
+    s.type==='inflation'?(s.contextEvidence?22:16):s.basis==='ai_style'?10:9),0);
+  // Only award a small diversity bonus, not the previous double-counting of
+  // the same generic phrases from both Gemini and the rule fallback.
+  if(overclaims.length>=2)score+=7;
+  if(compared.length>=2)score+=4;
+  if(uniqueBases.size>=3)score+=5;
+  score-=Math.min(7,positives.length*2+(actionable?2:0));
   score=cap(score);
-  if(!neg.length)score=Math.min(score,15);
-  if(overclaims.length===0)score=Math.min(score,62); // AI-ish wording != dishonesty
-  if(neg.length<=1)score=Math.min(score,42);
-  if(!pasted)score=Math.min(score,35); // only indexed search preview
-  if(nWords<100)score=Math.min(score,48); // few details, less certainty
-  if(!limited.length)score=0;
-  const verdict=score>=75?'A lot of résumé inflation.':score>=55?'Several claims need context.':score>=35?'Some résumé spin.':'Mostly straightforward.';
+  if(overclaims.length===0)score=Math.min(score,69); // wording questions ≠ lying
+  if(!pasted)score=Math.min(score,30); // search previews are not real profiles
+  if(nWords<100)score=Math.min(score,42);
+  if(!neg.length)score=0;
+  const verdict=score>=75?'LinkedIn is doing THE most.':score>=55?'The résumé got a little cinematic.':score>=35?'Some serious LinkedIn seasoning.':score>=15?'A little corporate glaze.':'Mostly straightforward.';
   let summary;
-  if(!limited.length) summary='There is not enough exact profile evidence for a useful wording assessment.';
-  else if(!pasted)summary='Only public search snippets were reviewed, not the live profile. Context may be missing or outdated, so this is a limited preview.';
-  else if(neg.length)summary=`Found ${neg.length} example${neg.length===1?'':'s'} of inflated scope or template-like wording${compared.length?`, including ${compared.length} claim-to-context comparison${compared.length===1?'':'s'}`:''}. The score describes the writing and what is documented, not whether anyone lied or used AI.`;
-  else summary='The supplied descriptions were mostly specific. No strong signs of inflated scope were supported by exact excerpts.';
-  const realityCheck=!pasted?'Search previews cannot establish what the person currently lists on LinkedIn.':
-    overclaims.length?'The text includes ambitious wording or claims that deserve more context. Compare the stated personal contribution, timing and deliverables; do not assume an unsupported claim is false.':
-    neg.length?'Some phrases sound formulaic. That is a writing-quality observation, not a finding of AI use.':'The provided excerpts give no clear basis to challenge the level of responsibilities described.';
+  if(!limited.length) summary='Not enough direct evidence to assess the writing.';
+  else if(!pasted)summary='This is only a public search preview, not the actual LinkedIn profile. No serious conclusions from snippets.';
+  else if(neg.length)summary=`Found ${neg.length} example${neg.length===1?'':'s'} of corporate-sounding language, ambitious presentation, or claims worth a follow-up. Some bullets contain real specifics, too. This is a critique of how the profile reads, NOT a finding of dishonesty or AI authorship.`;
+  else summary='The descriptions are largely specific. I could not find an evidence-backed reason to flag the wording.';
+  const realityCheck=!pasted?'Search snippets cannot show the full profile.':
+    overclaims.length?'The language is flexing. Ask what this person personally built, what their team did, and how the outcomes were measured before drawing conclusions.':
+    neg.length?'A little LinkedIn theatre does not mean a fake experience. Separate the concrete work from the marketing copy.':'The described work may be legitimate; a PDF cannot independently verify it either way.';
   const inflated=cap(overclaims.length*27+compared.length*14);
-  const density=cap(patterns/Math.max(80,nWords)*2000);
-  const missing=cap(neg.length*16+(!actionable?18:0)-positives.length*7);
+  const density=cap(neg.filter(s=>s.basis==='ai_style'||s.basis==='buzzwords').reduce((n,s)=>n+(s.points||11),0)*3);
+  const missing=cap(neg.filter(s=>['vague_impact','responsibility_scope','timeline_question'].includes(s.basis)).length*23+(!actionable?12:0)-positives.length*4);
   return {
     displayName:sourceKind==='pdf'&&pasted?getPdfOwnerName(profileText,ai?.displayName):'LinkedIn profile',
     headline:pasted?(sourceKind==='pdf'?'LinkedIn PDF export':'Review of pasted profile text'):'Limited public search preview',
